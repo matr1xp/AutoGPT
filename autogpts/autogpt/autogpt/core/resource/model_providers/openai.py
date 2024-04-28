@@ -1,6 +1,5 @@
 import enum
 import logging
-import math
 import os
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Iterator, Optional, ParamSpec, TypeVar
@@ -37,9 +36,7 @@ from autogpt.core.resource.model_providers.schema import (
     ModelProviderConfiguration,
     ModelProviderCredentials,
     ModelProviderName,
-    ModelProviderService,
     ModelProviderSettings,
-    ModelProviderUsage,
     ModelTokenizer,
 )
 from autogpt.core.utils.json_schema import JSONSchema
@@ -49,7 +46,6 @@ _T = TypeVar("_T")
 _P = ParamSpec("_P")
 
 OpenAIEmbeddingParser = Callable[[Embedding], Embedding]
-OpenAIChatParser = Callable[[str], dict]
 
 
 class OpenAIModelName(str, enum.Enum):
@@ -74,9 +70,11 @@ class OpenAIModelName(str, enum.Enum):
     GPT4_v3 = "gpt-4-1106-preview"
     GPT4_v3_VISION = "gpt-4-1106-vision-preview"
     GPT4_v4 = "gpt-4-0125-preview"
+    GPT4_v5 = "gpt-4-turbo-2024-04-09"
     GPT4_ROLLING = "gpt-4"
     GPT4_ROLLING_32k = "gpt-4-32k"
-    GPT4_TURBO = "gpt-4-turbo-preview"
+    GPT4_TURBO = "gpt-4-turbo"
+    GPT4_TURBO_PREVIEW = "gpt-4-turbo-preview"
     GPT4_VISION = "gpt-4-vision-preview"
     GPT4 = GPT4_ROLLING
     GPT4_32k = GPT4_ROLLING_32k
@@ -87,7 +85,6 @@ OPEN_AI_EMBEDDING_MODELS = {
     for info in [
         EmbeddingModelInfo(
             name=OpenAIModelName.EMBEDDING_v2,
-            service=ModelProviderService.EMBEDDING,
             provider_name=ModelProviderName.OPENAI,
             prompt_token_cost=0.0001 / 1000,
             max_tokens=8191,
@@ -95,7 +92,6 @@ OPEN_AI_EMBEDDING_MODELS = {
         ),
         EmbeddingModelInfo(
             name=OpenAIModelName.EMBEDDING_v3_S,
-            service=ModelProviderService.EMBEDDING,
             provider_name=ModelProviderName.OPENAI,
             prompt_token_cost=0.00002 / 1000,
             max_tokens=8191,
@@ -103,7 +99,6 @@ OPEN_AI_EMBEDDING_MODELS = {
         ),
         EmbeddingModelInfo(
             name=OpenAIModelName.EMBEDDING_v3_L,
-            service=ModelProviderService.EMBEDDING,
             provider_name=ModelProviderName.OPENAI,
             prompt_token_cost=0.00013 / 1000,
             max_tokens=8191,
@@ -118,7 +113,6 @@ OPEN_AI_CHAT_MODELS = {
     for info in [
         ChatModelInfo(
             name=OpenAIModelName.GPT3_v1,
-            service=ModelProviderService.CHAT,
             provider_name=ModelProviderName.OPENAI,
             prompt_token_cost=0.0015 / 1000,
             completion_token_cost=0.002 / 1000,
@@ -127,7 +121,6 @@ OPEN_AI_CHAT_MODELS = {
         ),
         ChatModelInfo(
             name=OpenAIModelName.GPT3_v2_16k,
-            service=ModelProviderService.CHAT,
             provider_name=ModelProviderName.OPENAI,
             prompt_token_cost=0.003 / 1000,
             completion_token_cost=0.004 / 1000,
@@ -136,7 +129,6 @@ OPEN_AI_CHAT_MODELS = {
         ),
         ChatModelInfo(
             name=OpenAIModelName.GPT3_v3,
-            service=ModelProviderService.CHAT,
             provider_name=ModelProviderName.OPENAI,
             prompt_token_cost=0.001 / 1000,
             completion_token_cost=0.002 / 1000,
@@ -145,7 +137,6 @@ OPEN_AI_CHAT_MODELS = {
         ),
         ChatModelInfo(
             name=OpenAIModelName.GPT3_v4,
-            service=ModelProviderService.CHAT,
             provider_name=ModelProviderName.OPENAI,
             prompt_token_cost=0.0005 / 1000,
             completion_token_cost=0.0015 / 1000,
@@ -154,7 +145,6 @@ OPEN_AI_CHAT_MODELS = {
         ),
         ChatModelInfo(
             name=OpenAIModelName.GPT4_v1,
-            service=ModelProviderService.CHAT,
             provider_name=ModelProviderName.OPENAI,
             prompt_token_cost=0.03 / 1000,
             completion_token_cost=0.06 / 1000,
@@ -163,7 +153,6 @@ OPEN_AI_CHAT_MODELS = {
         ),
         ChatModelInfo(
             name=OpenAIModelName.GPT4_v1_32k,
-            service=ModelProviderService.CHAT,
             provider_name=ModelProviderName.OPENAI,
             prompt_token_cost=0.06 / 1000,
             completion_token_cost=0.12 / 1000,
@@ -172,7 +161,6 @@ OPEN_AI_CHAT_MODELS = {
         ),
         ChatModelInfo(
             name=OpenAIModelName.GPT4_TURBO,
-            service=ModelProviderService.CHAT,
             provider_name=ModelProviderName.OPENAI,
             prompt_token_cost=0.01 / 1000,
             completion_token_cost=0.03 / 1000,
@@ -194,8 +182,10 @@ chat_model_mapping = {
     OpenAIModelName.GPT4_TURBO: [
         OpenAIModelName.GPT4_v3,
         OpenAIModelName.GPT4_v3_VISION,
-        OpenAIModelName.GPT4_v4,
         OpenAIModelName.GPT4_VISION,
+        OpenAIModelName.GPT4_v4,
+        OpenAIModelName.GPT4_TURBO_PREVIEW,
+        OpenAIModelName.GPT4_v5,
     ],
 }
 for base, copies in chat_model_mapping.items():
@@ -302,24 +292,15 @@ class OpenAIProvider(
         name="openai_provider",
         description="Provides access to OpenAI's API.",
         configuration=OpenAIConfiguration(
-            retries_per_request=10,
+            retries_per_request=7,
         ),
         credentials=None,
-        budget=ModelProviderBudget(
-            total_budget=math.inf,
-            total_cost=0.0,
-            remaining_budget=math.inf,
-            usage=ModelProviderUsage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            ),
-        ),
+        budget=ModelProviderBudget(),
     )
 
-    _budget: ModelProviderBudget
     _configuration: OpenAIConfiguration
     _credentials: OpenAICredentials
+    _budget: ModelProviderBudget
 
     def __init__(
         self,
@@ -349,6 +330,10 @@ class OpenAIProvider(
             self._client = AsyncOpenAI(**self._credentials.get_api_access_kwargs())
 
         self._logger = logger or logging.getLogger(__name__)
+
+    async def get_available_models(self) -> list[ChatModelInfo]:
+        _models = (await self._client.models.list()).data
+        return [OPEN_AI_MODELS[m.id] for m in _models if m.id in OPEN_AI_MODELS]
 
     def get_token_limit(self, model_name: str) -> int:
         """Get the token limit for a given model."""
@@ -412,12 +397,17 @@ class OpenAIProvider(
         model_name: OpenAIModelName,
         completion_parser: Callable[[AssistantChatMessage], _T] = lambda _: None,
         functions: Optional[list[CompletionModelFunction]] = None,
+        max_output_tokens: Optional[int] = None,
         **kwargs,
     ) -> ChatModelResponse[_T]:
-        """Create a completion using the OpenAI API."""
+        """Create a completion using the OpenAI API and parse it."""
 
         openai_messages, completion_kwargs = self._get_chat_completion_args(
-            model_prompt, model_name, functions, **kwargs
+            model_prompt=model_prompt,
+            model_name=model_name,
+            functions=functions,
+            max_tokens=max_output_tokens,
+            **kwargs,
         )
         tool_calls_compat_mode = bool(functions and "tools" not in completion_kwargs)
 
@@ -639,12 +629,9 @@ class OpenAIProvider(
             prompt_tokens_used = completion_tokens_used = 0
 
         cost = self._budget.update_usage_and_cost(
-            ChatModelResponse(
-                response=AssistantChatMessage(content=None),
-                model_info=OPEN_AI_CHAT_MODELS[model],
-                prompt_tokens_used=prompt_tokens_used,
-                completion_tokens_used=completion_tokens_used,
-            )
+            model_info=OPEN_AI_CHAT_MODELS[model],
+            input_tokens_used=prompt_tokens_used,
+            output_tokens_used=completion_tokens_used,
         )
         self._logger.debug(
             f"Completion usage: {prompt_tokens_used} input, "
