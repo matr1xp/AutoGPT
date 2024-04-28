@@ -15,10 +15,9 @@ from autogpt.core.resource.model_providers.openai import OpenAIModelName, OpenAI
 from autogpt.logs.helpers import request_user_double_check
 from autogpt.memory.vector import get_supported_memory_backends
 
-from autogpt.core.resource.model_providers.schema import ModelProviderName
-
-if TYPE_CHECKING:
-    from autogpt.core.resource.model_providers.openai import OpenAICredentials
+from autogpt.core.resource.model_providers import ModelProviderName
+from autogpt.core.resource.model_providers.openai import OpenAICredentials
+from autogpt.llm.providers.api_manager import ApiManager
 
 logger = logging.getLogger(__name__)
 

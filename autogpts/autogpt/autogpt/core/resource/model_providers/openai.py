@@ -37,6 +37,7 @@ from autogpt.core.resource.model_providers.schema import (
     ModelProviderCredentials,
     ModelProviderName,
     ModelProviderSettings,
+    ModelProviderService,
     ModelTokenizer,
 )
 from autogpt.core.utils.json_schema import JSONSchema
